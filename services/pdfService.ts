@@ -25,13 +25,18 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> => {
   });
 };
 
+// Helper to safely get Uint8Array from ArrayBuffer
+// Slicing ensures we pass a copy if needed and avoid detachment issues with some browser implementations of workers
+const getSafeBuffer = (buffer: ArrayBuffer): Uint8Array => {
+  return new Uint8Array(buffer).slice(0);
+};
+
 // --- Analysis & Utilities ---
 
 export const analyzePDF = async (file: File): Promise<{ isTextHeavy: boolean; pageCount: number }> => {
   try {
     const arrayBuffer = await readFileAsArrayBuffer(file);
-    // Wrap in Uint8Array to prevent "detached ArrayBuffer" errors during worker transfer
-    const loadingTask = pdfjs.getDocument(new Uint8Array(arrayBuffer));
+    const loadingTask = pdfjs.getDocument(getSafeBuffer(arrayBuffer));
     const pdf = await loadingTask.promise;
     const numPages = pdf.numPages;
     const maxPagesToCheck = Math.min(numPages, 3);
@@ -56,8 +61,7 @@ export const analyzePDF = async (file: File): Promise<{ isTextHeavy: boolean; pa
 
 export const getPdfPagePreviews = async (file: File): Promise<string[]> => {
   const arrayBuffer = await readFileAsArrayBuffer(file);
-  // Wrap in Uint8Array to prevent "detached ArrayBuffer" errors during worker transfer
-  const loadingTask = pdfjs.getDocument(new Uint8Array(arrayBuffer));
+  const loadingTask = pdfjs.getDocument(getSafeBuffer(arrayBuffer));
   const pdf = await loadingTask.promise;
   const numPages = pdf.numPages;
   const previews: string[] = [];
@@ -226,8 +230,7 @@ export const unlockPDF = async (file: File, password: string): Promise<Uint8Arra
 
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   const arrayBuffer = await readFileAsArrayBuffer(file);
-  // Wrap in Uint8Array to prevent "detached ArrayBuffer" errors during worker transfer
-  const loadingTask = pdfjs.getDocument(new Uint8Array(arrayBuffer));
+  const loadingTask = pdfjs.getDocument(getSafeBuffer(arrayBuffer));
   const pdf = await loadingTask.promise;
   let fullText = '';
   
@@ -391,8 +394,7 @@ export const compressPDFAdaptive = async (
   customConfig?: AdaptiveConfig
 ): Promise<CompressionResult> => {
   const arrayBuffer = await readFileAsArrayBuffer(file);
-  // Wrap in Uint8Array to prevent "detached ArrayBuffer" errors during worker transfer
-  const loadingTask = pdfjs.getDocument(new Uint8Array(arrayBuffer));
+  const loadingTask = pdfjs.getDocument(getSafeBuffer(arrayBuffer));
   const pdf = await loadingTask.promise;
   const numPages = pdf.numPages;
   const analysis = await analyzePDF(file);
@@ -559,8 +561,7 @@ export const generatePreviewPair = async (file: File, config: AdaptiveConfig): P
   };
 }> => {
   const arrayBuffer = await readFileAsArrayBuffer(file);
-  // Wrap in Uint8Array to prevent "detached ArrayBuffer" errors during worker transfer
-  const loadingTask = pdfjs.getDocument(new Uint8Array(arrayBuffer));
+  const loadingTask = pdfjs.getDocument(getSafeBuffer(arrayBuffer));
   const pdf = await loadingTask.promise;
   const numPages = pdf.numPages;
   const page = await pdf.getPage(1); // Preview first page
