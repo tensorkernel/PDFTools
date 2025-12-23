@@ -1,15 +1,16 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FileUpload } from '../UI/FileUpload';
 import { PDFFile, ProcessingStatus } from '../../types';
 import { loadPDFDocument, applySignaturesToPDF, SignaturePlacement } from '../../services/pdfService';
 import { 
-  Loader2, Save, Undo2, Redo2, Pen, Type, Upload as UploadIcon, 
-  Trash2, Grip, Plus, X, ArrowLeft
+  Loader2, Save, Plus, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 import { Link } from 'react-router-dom';
+import { ZoomControls } from '../UI/ZoomControls';
+import { useZoom } from '../../hooks/useZoom';
 
 interface SignatureItem {
   localId: string;
@@ -22,34 +23,32 @@ interface SignatureItem {
   aspectRatio: number;
 }
 
-// --- VIRTUAL PAGE COMPONENT ---
-// Renders only when visible via IntersectionObserver
+// --- VIRTUAL PAGE COMPONENT (Scaled) ---
 const PDFPage: React.FC<{
   pageIndex: number;
   pdfDoc: any;
-  scale: number;
   signatures: SignatureItem[];
   selectedSignatureId: string | null;
   onSelectSignature: (id: string | null) => void;
   onUpdateSignature: (id: string, updates: Partial<SignatureItem>) => void;
   onDeleteSignature: (id: string) => void;
   onPageClick: (e: React.MouseEvent, pageIndex: number, rect: DOMRect) => void;
-}> = ({ pageIndex, pdfDoc, scale, signatures, selectedSignatureId, onSelectSignature, onUpdateSignature, onDeleteSignature, onPageClick }) => {
+  zoom: number;
+}> = ({ pageIndex, pdfDoc, signatures, selectedSignatureId, onSelectSignature, onUpdateSignature, onDeleteSignature, onPageClick, zoom }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isRendered, setIsRendered] = useState(false);
   
-  // Dimensions state (to hold space before rendering)
+  // Dimensions state (logical points)
   const [dimensions, setDimensions] = useState({ width: 600, height: 850 });
 
-  // Intersection Observer
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) setIsVisible(true);
       },
-      { rootMargin: '200px' } // Preload 200px before
+      { rootMargin: '500px' }
     );
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
@@ -59,11 +58,11 @@ const PDFPage: React.FC<{
   useEffect(() => {
     const render = async () => {
       if (!isVisible || isRendered || !pdfDoc || !canvasRef.current) return;
-      
       try {
         const page = await pdfDoc.getPage(pageIndex + 1);
-        const viewport = page.getViewport({ scale });
-        setDimensions({ width: viewport.width, height: viewport.height });
+        const renderScale = 2.0; // High res render
+        const viewport = page.getViewport({ scale: renderScale });
+        setDimensions({ width: viewport.width / renderScale, height: viewport.height / renderScale });
         
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
@@ -71,7 +70,6 @@ const PDFPage: React.FC<{
 
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
@@ -82,48 +80,53 @@ const PDFPage: React.FC<{
       }
     };
     render();
-  }, [isVisible, isRendered, pdfDoc, pageIndex, scale]);
+  }, [isVisible, isRendered, pdfDoc]);
+
+  const scaledW = dimensions.width * zoom;
+  const scaledH = dimensions.height * zoom;
 
   return (
     <div 
-      ref={containerRef}
-      className="relative mb-8 shadow-lg bg-white transition-all duration-200 mx-auto"
-      style={{ width: dimensions.width, height: dimensions.height }}
+      className="relative mb-8 shadow-lg transition-all duration-200 bg-white"
+      style={{ width: scaledW, height: scaledH }}
       onClick={(e) => {
         if (containerRef.current) {
           onPageClick(e, pageIndex, containerRef.current.getBoundingClientRect());
         }
       }}
     >
-       {!isRendered && (
-         <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">
-            <Loader2 className="animate-spin" />
-         </div>
-       )}
-       <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" />
-       
-       {/* Signatures Layer */}
-       {signatures.map(sig => (
-         <DraggableSignature 
-           key={sig.localId}
-           item={sig}
-           containerRef={containerRef}
-           isSelected={selectedSignatureId === sig.localId}
-           onSelect={() => onSelectSignature(sig.localId)}
-           onUpdate={onUpdateSignature}
-           onDelete={onDeleteSignature}
-         />
-       ))}
+       <div 
+         ref={containerRef}
+         className="relative origin-top-left bg-white"
+         style={{ width: dimensions.width, height: dimensions.height, transform: `scale(${zoom})`, willChange: 'transform' }}
+       >
+          {!isRendered && (
+            <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">
+                <Loader2 className="animate-spin" />
+            </div>
+          )}
+          <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none w-full h-full" />
+          
+          {signatures.map(sig => (
+            <DraggableSignature 
+              key={sig.localId}
+              item={sig}
+              containerRef={containerRef}
+              isSelected={selectedSignatureId === sig.localId}
+              onSelect={() => onSelectSignature(sig.localId)}
+              onUpdate={onUpdateSignature}
+              onDelete={onDeleteSignature}
+            />
+          ))}
 
-       {/* Page Number Badge */}
-       <div className="absolute -right-12 top-0 text-xs font-bold text-slate-400">
-          {pageIndex + 1}
+          <div className="absolute -right-8 top-0 text-xs font-bold text-slate-300" style={{ transform: `scale(${1/zoom})`, transformOrigin: 0 }}>
+              {pageIndex + 1}
+          </div>
        </div>
     </div>
   );
 };
 
-// Re-implementing simplified DraggableSignature for context
 const DraggableSignature: React.FC<any> = ({ item, containerRef, isSelected, onSelect, onUpdate, onDelete }) => {
   const [isDragging, setIsDragging] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
@@ -133,8 +136,6 @@ const DraggableSignature: React.FC<any> = ({ item, containerRef, isSelected, onS
     onSelect();
     const clientX = e.type.includes('mouse') ? e.clientX : e.touches[0].clientX;
     const clientY = e.type.includes('mouse') ? e.clientY : e.touches[0].clientY;
-    
-    // Calculate drag offset relative to item
     const rect = e.target.getBoundingClientRect();
     dragOffset.current = { x: clientX - rect.left, y: clientY - rect.top };
     setIsDragging(true);
@@ -146,11 +147,9 @@ const DraggableSignature: React.FC<any> = ({ item, containerRef, isSelected, onS
       const clientX = e.type.includes('mouse') ? e.clientX : e.touches[0].clientX;
       const clientY = e.type.includes('mouse') ? e.clientY : e.touches[0].clientY;
       const containerRect = containerRef.current.getBoundingClientRect();
-      
       const xPixels = clientX - containerRect.left - dragOffset.current.x;
       const yPixels = clientY - containerRect.top - dragOffset.current.y;
       
-      // Convert to percentage
       const xPct = Math.max(0, Math.min(xPixels / containerRect.width, 1 - item.width));
       const yPct = Math.max(0, Math.min(yPixels / containerRect.height, 1 - (item.width/item.aspectRatio)));
       
@@ -195,8 +194,8 @@ export const SignPDF: React.FC = () => {
   
   const [signatures, setSignatures] = useState<SignatureItem[]>([]);
   const [selectedSigId, setSelectedSigId] = useState<string | null>(null);
+  const { zoom, zoomIn, zoomOut, resetZoom } = useZoom(1.0);
 
-  // --- File Load ---
   const handleFilesSelected = async (files: File[]) => {
     if (files.length === 0) return;
     const f = files[0];
@@ -210,20 +209,14 @@ export const SignPDF: React.FC = () => {
     }
   };
 
-  // --- Signature Logic ---
   const addSignature = (dataUrl: string) => {
-    // Add to center of FIRST page initially, user can drag anywhere?
-    // Better: Add to center of viewport? 
-    // For now: Add to page 0 center
     const newSig: SignatureItem = {
       localId: uuidv4(),
       id: uuidv4(),
-      pageIndex: 0, // Default to first page, or currently visible page?
+      pageIndex: 0, 
       dataUrl,
       x: 0.35, y: 0.4, width: 0.3, aspectRatio: 2
     };
-    
-    // Quick img load for aspect ratio
     const img = new Image();
     img.onload = () => {
       newSig.aspectRatio = img.width / img.height;
@@ -256,7 +249,6 @@ export const SignPDF: React.FC = () => {
     } catch (e) { console.error(e); }
   };
 
-  // Mock Modal State
   const [showModal, setShowModal] = useState(false);
 
   return (
@@ -284,29 +276,33 @@ export const SignPDF: React.FC = () => {
                 <FileUpload onFilesSelected={handleFilesSelected} accept=".pdf" label="Drop PDF to sign" />
              </motion.div>
           ) : (
-             <div className="flex-1 bg-slate-100 dark:bg-slate-950/50 rounded-2xl overflow-y-auto custom-scrollbar p-8 flex flex-col items-center relative border border-slate-200 dark:border-slate-800">
-                {Array.from({ length: pdfDoc?.numPages || 0 }).map((_, i) => (
-                   <PDFPage 
-                     key={i}
-                     pageIndex={i}
-                     pdfDoc={pdfDoc}
-                     scale={1.5} // Fixed scale for scroll view
-                     signatures={signatures.filter(s => s.pageIndex === i)}
-                     selectedSignatureId={selectedSigId}
-                     onSelectSignature={setSelectedSigId}
-                     onUpdateSignature={updateSignature}
-                     onDeleteSignature={deleteSignature}
-                     onPageClick={(e, idx, rect) => {
-                        // Logic to move signature between pages could go here
-                        setSelectedSigId(null);
-                     }}
-                   />
-                ))}
+             <div className="flex-1 flex flex-col min-h-0 bg-slate-100 dark:bg-slate-950/50 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden relative">
+                
+                <div className="absolute bottom-6 right-6 z-30">
+                  <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-8 flex flex-col items-center">
+                    {Array.from({ length: pdfDoc?.numPages || 0 }).map((_, i) => (
+                      <PDFPage 
+                        key={i}
+                        pageIndex={i}
+                        pdfDoc={pdfDoc}
+                        signatures={signatures.filter(s => s.pageIndex === i)}
+                        selectedSignatureId={selectedSigId}
+                        onSelectSignature={setSelectedSigId}
+                        onUpdateSignature={updateSignature}
+                        onDeleteSignature={deleteSignature}
+                        onPageClick={(e, idx, rect) => setSelectedSigId(null)}
+                        zoom={zoom}
+                      />
+                    ))}
+                    <div className="h-20" />
+                </div>
              </div>
           )}
        </AnimatePresence>
 
-       {/* Simplified Modal Logic for demo */}
        {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
              <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-2xl max-w-md w-full">
@@ -317,7 +313,6 @@ export const SignPDF: React.FC = () => {
                 <div className="flex justify-end gap-2">
                    <button onClick={() => setShowModal(false)} className="px-4 py-2 text-slate-500">Cancel</button>
                    <button onClick={() => { 
-                      // Mock signature data
                       addSignature('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='); 
                       setShowModal(false); 
                    }} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Use Mock Sig</button>

@@ -10,6 +10,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 import { Link } from 'react-router-dom';
+import { ZoomControls } from '../UI/ZoomControls';
+import { useZoom } from '../../hooks/useZoom';
 
 // --- REUSABLE PAGE COMPONENT (Virtual Scroll) ---
 const PDFPage: React.FC<{
@@ -20,17 +22,19 @@ const PDFPage: React.FC<{
   onSelect: (id: string | null) => void;
   onUpdate: (id: string, updates: Partial<EditorElement>) => void;
   onDelete: (id: string) => void;
-}> = ({ pageIndex, pdfDoc, elements, selectedId, onSelect, onUpdate, onDelete }) => {
+  zoom: number;
+}> = ({ pageIndex, pdfDoc, elements, selectedId, onSelect, onUpdate, onDelete, zoom }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isRendered, setIsRendered] = useState(false);
+  // Base dimensions at scale 1.0 (PDF Points)
   const [dims, setDims] = useState({ w: 600, h: 850 });
 
   useEffect(() => {
     const obs = new IntersectionObserver(([entry]) => {
        if (entry.isIntersecting) setIsVisible(true);
-    }, { rootMargin: '300px' });
+    }, { rootMargin: '500px' }); // Larger preload margin for smooth zooming
     if (containerRef.current) obs.observe(containerRef.current);
     return () => obs.disconnect();
   }, []);
@@ -40,12 +44,18 @@ const PDFPage: React.FC<{
       if (!isVisible || isRendered || !pdfDoc || !canvasRef.current) return;
       try {
         const page = await pdfDoc.getPage(pageIndex + 1);
-        const viewport = page.getViewport({ scale: 1.5 });
-        setDims({ w: viewport.width, h: viewport.height });
+        // Render at a high fixed scale (e.g. 2.0) for sharpness when zooming in
+        // We do NOT re-render on zoom change, we just scale the CSS
+        const renderScale = 2.0; 
+        const viewport = page.getViewport({ scale: renderScale });
+        
+        // Store logical dimensions (1.0 scale) for layout
+        setDims({ w: viewport.width / renderScale, h: viewport.height / renderScale });
         
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+        
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         ctx.fillStyle = '#fff';
@@ -57,18 +67,40 @@ const PDFPage: React.FC<{
     render();
   }, [isVisible, isRendered, pdfDoc]);
 
+  // Scaled dimensions for the wrapper
+  const scaledW = dims.w * zoom;
+  const scaledH = dims.h * zoom;
+
   return (
-    <div ref={containerRef} className="relative mb-8 shadow-lg bg-white mx-auto" style={{ width: dims.w, height: dims.h }} onClick={() => onSelect(null)}>
-       <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" />
-       {elements.map(el => (
-         <ResizableElement 
-           key={el.id} element={el} containerRef={containerRef}
-           isSelected={selectedId === el.id}
-           onSelect={() => onSelect(el.id)}
-           onUpdate={onUpdate} onDelete={onDelete}
-         />
-       ))}
-       <div className="absolute -right-10 top-0 text-xs font-bold text-slate-300">{pageIndex + 1}</div>
+    <div 
+      className="relative mb-8 shadow-lg transition-all duration-200 bg-white"
+      style={{ width: scaledW, height: scaledH }} // Helper wrapper for layout flow
+      onClick={() => onSelect(null)}
+    >
+      <div 
+        ref={containerRef}
+        className="relative origin-top-left bg-white"
+        style={{ 
+          width: dims.w, 
+          height: dims.h, 
+          transform: `scale(${zoom})`,
+          // Ensure visual quality when scaling
+          willChange: 'transform'
+        }}
+      >
+        <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none w-full h-full" />
+        {elements.map(el => (
+          <ResizableElement 
+            key={el.id} element={el} containerRef={containerRef}
+            isSelected={selectedId === el.id}
+            onSelect={() => onSelect(el.id)}
+            onUpdate={onUpdate} onDelete={onDelete}
+          />
+        ))}
+        <div className="absolute -right-8 top-0 text-xs font-bold text-slate-300 pointer-events-none" style={{ transform: `scale(${1/zoom})`, transformOrigin: 0 }}>
+          {pageIndex + 1}
+        </div>
+      </div>
     </div>
   );
 };
@@ -94,6 +126,12 @@ const ResizableElement: React.FC<any> = ({ element, isSelected, onSelect, onUpda
       const clientX = e.clientX || e.touches[0].clientX;
       const clientY = e.clientY || e.touches[0].clientY;
       const cRect = containerRef.current.getBoundingClientRect();
+      
+      // Calculate position as percentage of the UN-SCALED container size
+      // getBoundingClientRect returns the SCALED size on screen.
+      // So logic: (click - rect.left) / rect.width 
+      // This automatically accounts for zoom because rect.width IS scaled!
+      
       const x = (clientX - cRect.left - dragStart.current.x) / cRect.width;
       const y = (clientY - cRect.top - dragStart.current.y) / cRect.height;
       onUpdate(element.id, { x, y });
@@ -133,6 +171,8 @@ export const EditPDF: React.FC = () => {
   const [elements, setElements] = useState<EditorElement[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState<ProcessingStatus>({ isProcessing: false, progress: 0, message: '' });
+  
+  const { zoom, zoomIn, zoomOut, resetZoom } = useZoom(1.0);
 
   const handleFilesSelected = async (files: File[]) => {
     if (files.length === 0) return;
@@ -183,15 +223,25 @@ export const EditPDF: React.FC = () => {
                 <FileUpload onFilesSelected={handleFilesSelected} accept=".pdf" label="Drop PDF to edit" />
              </motion.div>
           ) : (
-             <div className="flex-1 bg-slate-100 dark:bg-slate-950/50 rounded-2xl overflow-y-auto custom-scrollbar p-8 flex flex-col items-center border border-slate-200 dark:border-slate-800">
-                {Array.from({ length: pdfDoc?.numPages || 0 }).map((_, i) => (
-                   <PDFPage 
-                      key={i} pageIndex={i} pdfDoc={pdfDoc}
-                      elements={elements.filter(e => e.pageIndex === i)}
-                      selectedId={selectedId} onSelect={setSelectedId}
-                      onUpdate={updateElement} onDelete={deleteElement}
-                   />
-                ))}
+             <div className="flex-1 flex flex-col min-h-0 bg-slate-100 dark:bg-slate-950/50 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden relative">
+                
+                {/* Floating Zoom Controls */}
+                <div className="absolute bottom-6 right-6 z-30">
+                  <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-8 flex flex-col items-center">
+                    {Array.from({ length: pdfDoc?.numPages || 0 }).map((_, i) => (
+                      <PDFPage 
+                          key={i} pageIndex={i} pdfDoc={pdfDoc}
+                          elements={elements.filter(e => e.pageIndex === i)}
+                          selectedId={selectedId} onSelect={setSelectedId}
+                          onUpdate={updateElement} onDelete={deleteElement}
+                          zoom={zoom}
+                      />
+                    ))}
+                    <div className="h-20" /> {/* Bottom Spacer */}
+                </div>
              </div>
           )}
        </AnimatePresence>
