@@ -15,6 +15,9 @@ export const MergePDF: React.FC = () => {
     const pdfs = newFiles.filter(f => f.type === 'application/pdf');
     if (pdfs.length === 0) return;
 
+    // Optimistic UI: Add placeholders first if needed, or just wait for processing
+    // For local files, processing page count is fast enough to await usually.
+    // We map them to PDFFile objects.
     const mappedFiles: PDFFile[] = await Promise.all(pdfs.map(async (f) => ({
       id: uuidv4(),
       file: f,
@@ -35,7 +38,9 @@ export const MergePDF: React.FC = () => {
     setStatus({ isProcessing: true, progress: 10, message: 'Processing...' });
     try {
       const rawFiles = files.map(f => f.file);
+      // Small artificial delay for UX (so the loader is seen)
       await new Promise(r => setTimeout(r, 500));
+      
       const mergedPdfBytes = await mergePDFs(rawFiles);
       
       const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
@@ -78,8 +83,12 @@ export const MergePDF: React.FC = () => {
 
             <Reorder.Group axis="y" values={files} onReorder={setFiles} className="space-y-3">
               {files.map((file) => (
-                <Reorder.Item key={file.id} value={file}>
-                  <div className="bg-white dark:bg-slate-900 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 flex items-center gap-4 group cursor-grab active:cursor-grabbing hover:border-blue-500/50 transition-colors">
+                <Reorder.Item 
+                  key={file.id} 
+                  value={file}
+                  whileDrag={{ scale: 1.02, boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" }}
+                >
+                  <div className="bg-white dark:bg-slate-900 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 flex items-center gap-4 group cursor-grab active:cursor-grabbing hover:border-blue-500/50 transition-colors select-none">
                     <GripVertical className="text-slate-400" />
                     <div className="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-500 rounded-lg">
                       <FileText size={20} />
@@ -88,7 +97,10 @@ export const MergePDF: React.FC = () => {
                       <p className="font-medium text-slate-800 dark:text-slate-200 truncate">{file.name}</p>
                       <p className="text-xs text-slate-500">{file.pageCount} pages • {(file.size / 1024 / 1024).toFixed(2)} MB</p>
                     </div>
-                    <button onClick={() => removeFile(file.id)} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors">
+                    <button 
+                      onClick={() => removeFile(file.id)}
+                      className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
+                    >
                       <X size={18} />
                     </button>
                   </div>
